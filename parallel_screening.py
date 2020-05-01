@@ -65,10 +65,10 @@ def get_property_from_mol_block(mol_block, property_name):
 
     return None
 
-def mol_block_to_fp(mol_block, fingerprint_function):
+def mol_block_to_fp(mol_block, fingerprint_function, id_name):
 
     try:
-        id_val = get_property_from_mol_block(mol_block, "DRUGBANK_ID")
+        id_val = get_property_from_mol_block(mol_block, id_name)
         mol = Wrapper("MolFromMolBlock", "rdkit.Chem")(mol_block)
         smiles = Chem.MolToSmiles(mol)
         if mol == None:
@@ -81,7 +81,7 @@ def mol_block_to_fp(mol_block, fingerprint_function):
 
 def predict_batch(batch, model, id_name, fingerprint_function, num_workers):
 
-    data = Parallel(n_jobs = num_workers)(delayed(mol_block_to_fp)(x, fingerprint_function) for x in batch)
+    data = Parallel(n_jobs = num_workers)(delayed(mol_block_to_fp)(x, fingerprint_function, id_name) for x in batch)
     data = [x for x in data if x != None]
     fps = np.array([x[0] for x in data])
     ids = np.array([x[1] for x in data])
