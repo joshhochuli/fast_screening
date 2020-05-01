@@ -1,38 +1,13 @@
 import numpy as np
-import pandas as pd
-import seaborn as sns
-'''
-import matplotlib.pyplot as plt
-import csv
-import _pickle as cPickle
-import gzip
-
-#from BalanceBySim import *
-#from stats import *
-
-#from collections import Counter
-
-'''
 from rdkit import Chem
-from rdkit.Chem import AllChem
-from rdkit.Chem import Draw
-from rdkit.Chem import PandasTools
-
-'''
-from sklearn import metrics
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split, cross_validate, GridSearchCV
-from sklearn.model_selection import permutation_test_score, StratifiedKFold
-
-from molvs.validate import Validator
-
-'''
 import sys
 sys.path.append('/home/josh/git/chemical_curation/')
 from curate import *
-
 from joblib import Parallel, delayed
 
+#trying to run the rdkit fingerprint functions in parallel complains about pickling boost functions
+#this stackoverflow magic sidesteps it
+#although it might cause a lot of overhead with the import every time? or maybe it's cached?
 class Wrapper(object):
     def __init__(self, method_name, module_name):
         self.method_name = method_name
@@ -77,14 +52,15 @@ def parallel_screen(input_filename, id_name, model, fingerprint_function, output
         mols  = []
         print(f"{count} molecules processed")
 
-def get_parameter_from_mol_block(mol_block, parameter_name):
+#rdkit's MolFromMolBlock doesn't seem to read in properties
+def get_property_from_mol_block(mol_block, property_name):
 
     next_line = False
     lines = mol_block.split('\n')
     for line in lines:
         if next_line:
             return line.strip()
-        if parameter_name in line:
+        if property_name in line:
             next_line = True
 
     return None
@@ -92,7 +68,7 @@ def get_parameter_from_mol_block(mol_block, parameter_name):
 def mol_block_to_fp(mol_block, fingerprint_function):
 
     try:
-        id_val = get_parameter_from_mol_block(mol_block, "DRUGBANK_ID")
+        id_val = get_property_from_mol_block(mol_block, "DRUGBANK_ID")
         mol = Wrapper("MolFromMolBlock", "rdkit.Chem")(mol_block)
         smiles = Chem.MolToSmiles(mol)
         if mol == None:
