@@ -94,6 +94,9 @@ def predict_batch(batch, model, id_name, fingerprint_function, num_workers):
         active_id_vals = ids[i]
         active_smiles_list = smiles[i]
 
+    else:
+        return [], []
+
     return active_id_vals, active_smiles_list
 
 def main():
