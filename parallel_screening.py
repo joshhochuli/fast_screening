@@ -5,6 +5,8 @@ sys.path.append('/home/josh/git/chemical_curation/')
 from curate import *
 from joblib import Parallel, delayed
 
+import traceback
+
 #trying to run the rdkit fingerprint functions in parallel complains about pickling boost functions
 #this stackoverflow magic sidesteps it
 #although it might cause a lot of overhead with the import every time? or maybe it's cached?
@@ -18,8 +20,40 @@ class Wrapper(object):
         method = getattr(module, self.method_name)
         return method(*args, **kwargs)
 
+def parallel_screen_smiles(input_filename, id_location, model, fingerprint_function, output_filename, batch_size = 1024, num_workers = 4):
 
-def parallel_screen(input_filename, id_name, model, fingerprint_function, output_filename, batch_size = 1024, num_workers = 4):
+    f = open(input_filename, 'r')
+    o = open(output_filename, 'a+')
+
+    smiles_list = []
+    count = 0
+    for line in f:
+        smiles_list.append(line)
+        count = count + 1
+        if len(smiles_list) == batch_size:
+
+            active_ids, active_smiles = predict_batch(smiles_list, model,
+                id_info = id_location, fingerprint_function = fingerprint_function, 
+                reading_function = smiles_to_fp, num_workers = num_workers)
+
+            for i in range(len(active_ids)):
+                o.write(f"{active_ids[i]},{active_smiles[i]}\n")
+            smiles_list  = []
+            print(f"{count} molecules processed")
+
+    if len(smiles_list) > 0:
+
+        active_ids, active_smiles = predict_batch(smiles_list, model,
+                id_info = id_location, fingerprint_function = fingerprint_function, 
+                reading_function = smiles_to_fp, num_workers = num_workers)
+
+        for i in range(len(active_ids)):
+            o.write(f"{active_ids[i]},{active_smiles[i]}\n")
+        print(f"{count} molecules processed")
+
+
+
+def parallel_screen_sdf(input_filename, id_name, model, fingerprint_function, output_filename, batch_size = 1024, num_workers = 4):
 
     f = open(input_filename, 'r')
     o = open(output_filename, 'a+')
@@ -35,7 +69,7 @@ def parallel_screen(input_filename, id_name, model, fingerprint_function, output
             mols.append(mol_string)
             if len(mols) == batch_size:
                 active_ids, active_smiles = predict_batch(mols, model,
-                    id_name = id_name, fingerprint_function = fingerprint_function, num_workers = num_workers)
+                    id_name = id_name, fingerprint_function = fingerprint_function, reading_function = mol_block_to_fp, num_workers = num_workers)
                 for i in range(len(active_ids)):
                     o.write(f"{active_ids[i]},{active_smiles[i]}\n")
                 mols  = []
@@ -46,7 +80,7 @@ def parallel_screen(input_filename, id_name, model, fingerprint_function, output
 
     if len(mols) > 0:
         active_ids, active_smiles = predict_batch(mols, model,
-            id_name = id_name, fingerprint_function = fingerprint_function, num_workers = num_workers)
+            id_name = id_name, fingerprint_function = fingerprint_function, reading_function = mol_block_to_fp, num_workers = num_workers)
         for i in range(len(active_ids)):
             o.write(f"{active_ids[i]},{active_smiles[i]}\n")
         mols  = []
@@ -70,6 +104,8 @@ def mol_block_to_fp(mol_block, fingerprint_function, id_name):
     try:
         id_val = get_property_from_mol_block(mol_block, id_name)
         mol = Wrapper("MolFromMolBlock", "rdkit.Chem")(mol_block)
+        curated_mol = Mol.from_rdkit_mol(mol, precise_activities = 1)
+        mol = curated_mol.mol
         smiles = Chem.MolToSmiles(mol)
         if mol == None:
             return None
@@ -79,9 +115,41 @@ def mol_block_to_fp(mol_block, fingerprint_function, id_name):
         return None
     return fp, id_val, smiles
 
-def predict_batch(batch, model, id_name, fingerprint_function, num_workers):
+#take in whole line of smiles file
+#id_location == 0 will use first token as id and second as smiles
+#id_location == 1 will use first token as smiles and second as id
+def smiles_to_fp(smiles_line, fingerprint_function, id_location):
 
-    data = Parallel(n_jobs = num_workers)(delayed(mol_block_to_fp)(x, fingerprint_function, id_name) for x in batch)
+    s = smiles_line.split(",")
+    if id_location == 0:
+        id_val = s[0].strip()
+        smiles = s[1].strip()
+    elif id_location == 1:
+        id_val = s[1].strip()
+        smiles = s[0].strip()
+    else:
+        raise Exception(f"id_location must be 0 or 1 ({id_location} provided)")
+
+    try:
+        mol = Wrapper("MolFromSmiles", "rdkit.Chem")(smiles)
+        curated_mol = Mol.from_rdkit_mol(mol, precise_activities = 0)
+        smiles = Chem.MolToSmiles(curated_mol.mol)
+        if curated_mol.mol == None:
+            return None
+        fp = fingerprint_function(curated_mol.mol)
+    except Exception as e:
+        print(e)
+        return None
+
+    return fp, id_val, smiles
+
+
+def predict_batch(batch, model, id_info, fingerprint_function, reading_function, num_workers):
+
+    if reading_function == smiles_to_fp:
+        data = Parallel(n_jobs = num_workers)(delayed(reading_function)(x, fingerprint_function, id_info) for x in batch)
+    elif reading_function == mol_block_to_fp:
+        data = Parallel(n_jobs = num_workers)(delayed(reading_function)(x, fingerprint_function, id_info) for x in batch)
     data = [x for x in data if x != None]
     fps = np.array([x[0] for x in data])
     ids = np.array([x[1] for x in data])
@@ -104,7 +172,7 @@ def main():
     model = get_model()
 
     #molecule_by_molecule_screen('/home/josh/git/sars-cov-mpro/datasets/curated_data/drugbank.sdf', model = model, output_filename = 'test.csv', num_workers = 2)
-    parallel_screen('/home/josh/git/sars-cov-mpro/datasets/curated_data/drugbank.sdf', model = model, output_filename = 'test.csv', num_workers = 12, batch_size = 4096)
+    parallel_screen_sdf('/home/josh/git/sars-cov-mpro/datasets/curated_data/drugbank.sdf', model = model, output_filename = 'test.csv', num_workers = 12, batch_size = 4096)
 
     exit()
 
