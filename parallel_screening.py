@@ -10,6 +10,8 @@ import traceback
 
 from multiprocessing import Process, Queue, cpu_count
 import time
+import gzip
+import pickle
 from rdkit import Chem
 from rdkit.Chem import AllChem
 from rdkit.Chem import DataStructs
@@ -30,6 +32,24 @@ class Wrapper(object):
         return method(*args, **kwargs)
 '''
 
+class ModelHolder(object):
+
+    def __init__(self, model_filename, descriptor_function):
+
+        self.model_filename = model_filename
+        self.descriptor_function = descriptor_function
+
+        with gzip.open(self.model_filename, 'rb') as f:
+            self.model = pickle.load(f)
+
+    def get_scores(self, mols):
+
+        descs = np.array([self.descriptor_function(mol) for mol in mols])
+        scores = self.model.predict_proba(descs)
+        scores = scores[:,0]
+
+        return scores
+
 def get_morgan_descriptor(mol, radius = 2, convert_to_np = True):
 
     fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius)
@@ -41,44 +61,64 @@ def get_morgan_descriptor(mol, radius = 2, convert_to_np = True):
         return arr
 
     return fp
+ 
+    
+    def __init__(self, filenames, output_filename, work_function, result_checker = lambda x: True, file_read_workers = 1, model_workers = 2, delimiter = "", skip_first_line = True, smiles_position = 0, batch_size = 8192):
 
-#performs all tasks (reading, computing) except writing in a single process
-class UnifiedScreener(object):
-
-    def __init__(self, filenames, output_filename, mol_function, workers = 2, delimiter = "", skip_first_line = True, smiles_position = 0):
-
-        #attempt to slaughter child processes when main process terminates
+        #attempt to slaughter children when main process terminates
         import atexit
         atexit.register(self.__del__)
 
+        #build shared queue of all filenames
         self.filename_queue = Queue()
         for filename in filenames:
             extension = filename.split(".")[-1].lower()
             if extension == "smiles" or extension == "csv" or extension == "txt":
                 self.filename_queue.put((filename, SmilesIterator))
 
+        #put flag at end of queue to signal workers to gracefully exit
         self.filename_queue.put("EMPTY")
 
-        self.mol_queue = Queue()
+
+#performs all tasks (reading, computing) except writing in a single process
+class UnifiedScreener(object):
+
+    #work_function: takes in a list of RDKit mols, outputs a list of corresponding scores
+    #result_checker: takes in score, outputs True if it should be kept, False if it can be thrown away. Default lambda keeps everything
+    #num_workers: number of processes allowed to be spawned. If "None", detect number of cpus and use them all
+    def __init__(self, filenames, output_filename, mol_function, num_workers = None, result_checker = lambda x: True, delimiter = "", skip_first_line = True, smiles_position = 0, batch_size = 8192):
+
+        #attempt to slaughter child processes when main process terminates
+        import atexit
+        atexit.register(self.__del__)
+
+        if num_workers == None:
+            print("Detected {cpu_count()} cpus. Using them all.")
+            num_workers = cpu_count()
+
+        #build shared queue with all filenames
+        self.filename_queue = Queue()
+        for filename in filenames:
+            extension = filename.split(".")[-1].lower()
+            if extension == "smiles" or extension == "csv" or extension == "txt":
+                self.filename_queue.put((filename, SmilesIterator))
+
+        #add flag at end of queue to signal workers to exit gracefully
+        self.filename_queue.put("EMPTY")
+
         self.result_queue = Queue()
-        self.workers = workers
+        self.num_workers = num_workers
 
-        self.processes = []
+        self.worker_processes = []
 
-        print(f"Using {self.workers} workers to do everything")
-        for i in range(self.workers):
-            process = Process(target=self.worker_function, args=(self.filename_queue, mol_function, self.result_queue))
-            self.processes.append(process)
+        print(f"Using {self.num_workers} workers")
+        #leave one cpu for the writing process and one for the main process
+        for i in range(self.num_workers - 2):
+            process = Process(target=self.worker_function, args=(self.filename_queue, mol_function, self.result_queue, batch_size))
+            self.worker_processes.append(process)
 
-        process = Process(target=self.write_function, args=(output_filename, self.result_queue, self.nsp13_result_checker))
-        self.processes.append(process)
-
-
-    def nsp13_result_checker(self, result):
-
-        if float(result[2]) > 0.8:
-            return True
-        return False
+        process = Process(target=self.write_function, args=(output_filename, self.result_queue, result_checker))
+        self.writer_process = process
 
     def write_function(self, filename, result_queue, result_checker):
 
@@ -93,14 +133,20 @@ class UnifiedScreener(object):
         total_counter = 1
         while True:
             result = result_queue.get(block = True, timeout = 1000)
-            print(f"RESULT LENGTH: {len(result)}")
+            if result == "EMPTY":
+                f.close()
+                log_f.close()
+                return
+
+            
 
             for x in result:
-                if not result_checker(x):
+                if not result_checker(x[2]):
                     continue
 
                 s = ",".join([str(i) for i in x] )
                 f.write(f"{s}\n")
+
             counter += len(result)
 
             end_time = time.time()
@@ -108,37 +154,39 @@ class UnifiedScreener(object):
             global_elapsed = end_time - global_start_time
             time_per_mol = global_elapsed / total_counter
             total_counter += len(result)
-            log_f.write("Mol queue size: " + str(self.mol_queue.qsize()) + "\n")
-            log_f.write("Result queue size: " + str(self.result_queue.qsize()) + "\n")
             log_f.write(f"Mols processed: {total_counter} (global per hour: {int(1 / (time_per_mol / 3600)):,})" + "\n")
             log_f.flush()
 
             f.flush()
             start_time = time.time()
 
-
-        f.close()
-
     def __del__(self):
-        print("Killing all processes!!!")
 
-        for process in self.processes:
+        for process in self.worker_processes:
             process.terminate()
             process.join()
+
+        self.writer_process.terminate()
+        self.writer_process.join()
 
     def dummy_mol_function(self, mol):
 
         fp = get_morgan_descriptor(mol)
         return np.sum(fp)
 
-    def start(self):
+    def run(self):
 
-        print(len(self.processes))
-        for process in self.processes:
+        for process in self.worker_processes:
             process.start()
-            time.sleep(0.1)
 
-    def worker_function(self, filename_queue, mol_function, result_queue, batch_size = 32768):
+        self.writer_process.start()
+
+        for process in self.worker_processes:
+            process.join()
+
+        self.result_queue.put("EMPTY")
+
+    def worker_function(self, filename_queue, mol_function, result_queue, batch_size):
 
         while True:
             try:
@@ -146,12 +194,12 @@ class UnifiedScreener(object):
             except:
                 return
             if queue_item == "EMPTY":
+                filename_queue.put("EMPTY")
                 return
 
             filename, iterator_class = queue_item
             iterator = iterator_class(filename)
-            print(f"STARTING FILE: {filename}")
-            print(filename, iterator_class)
+            print(f"Worker using file: {filename}")
 
             count = 0
             mols = []
@@ -159,7 +207,9 @@ class UnifiedScreener(object):
                 count += 1
                 if count >= batch_size:
 
-                    results = [(point[0], point[1], mol_function(point[2])) for point in mols]
+                    filenames, smiles, mols = zip(*mols)
+                    scores = mol_function(mols)
+                    results = list(zip(filenames, smiles, scores))
                     result_queue.put(results)
                     count = 0
                     mols = []
@@ -167,32 +217,42 @@ class UnifiedScreener(object):
                 mols.append((filename, Chem.MolToSmiles(mol), mol))
 
             #run final batch
-            results = [(point[0], point[1], mol_function(point[2])) for point in mols]
+            filenames, smiles, mols = zip(*mols)
+            scores = mol_function(mols)
+            results = list(zip(filenames, smiles, scores))
             result_queue.put(results)
             count = 0
             mols = []
 
    
+'''
 class SplitScreener(object):
 
-    def __init__(self, filenames, output_filename, mol_function, file_read_workers = 1, model_workers = 2, delimiter = "", skip_first_line = True, smiles_position = 0):
+    
+    #work_function: takes in an RDKit mol, outputs a score
+    #result_checker: takes in score, outputs True if it should be kept, False if it can be thrown away. Default lambda keeps everything
+    
+    def __init__(self, filenames, output_filename, work_function, result_checker = lambda x: True, file_read_workers = 1, model_workers = 2, delimiter = "", skip_first_line = True, smiles_position = 0, batch_size = 8192):
 
-        #attempt to slaughter child processes when main process terminates
+        #attempt to slaughter children when main process terminates
         import atexit
         atexit.register(self.__del__)
 
+        #build shared queue of all filenames
         self.filename_queue = Queue()
         for filename in filenames:
             extension = filename.split(".")[-1].lower()
             if extension == "smiles" or extension == "csv" or extension == "txt":
                 self.filename_queue.put((filename, SmilesIterator))
 
+        #put flag at end of queue to signal workers to gracefully exit
         self.filename_queue.put("EMPTY")
 
         self.mol_queue = Queue()
         self.result_queue = Queue()
         self.file_read_workers = file_read_workers
         self.model_workers = model_workers
+        self.batch_size = batch_size
 
         self.processes = []
         print(f"Using {self.file_read_workers} workers to read files and generate mols")
@@ -294,9 +354,7 @@ class SplitScreener(object):
 
     def reader_function(self, filename_queue, mol_queue, max_queue_size = 10, batch_size = 32768):
 
-        print("ENTERING READER")
         while True:
-            print("HERE")
             try:
                 queue_item = filename_queue.get()
             except:
@@ -309,8 +367,8 @@ class SplitScreener(object):
                 print(queue_item)
                 print("!!!!!")
             iterator = iterator_class(filename)
-            print(f"READER STARTING FILE: {filename}")
-            print(filename, iterator_class)
+            #print(f"READER STARTING FILE: {filename}")
+            #print(filename, iterator_class)
 
             
 
@@ -329,6 +387,7 @@ class SplitScreener(object):
                     count = 0
 
                 mols.append((filename, Chem.MolToSmiles(mol), mol))
+'''
     
 class SDFIterator():
     pass

@@ -22,10 +22,26 @@ class TestWorking(unittest.TestCase):
 
     def test_Screener(self):
 
-        filenames = list(glob.glob("test_data/*.txt"))
-        screener = UnifiedScreener(filenames, output_filename = "screener_test.txt", mol_function = get_nsp13_structural_reward, workers = 31, delimiter = "", skip_first_line = True, smiles_position = 0)
+        filenames = list(glob.glob("test_data/a*.txt"))
+        screener = UnifiedScreener(filenames, output_filename = "screener_test.txt", mol_function = get_nsp13_structural_reward, num_workers = 10, delimiter = "", skip_first_line = True, smiles_position = 0)
 
-        screener.start()
+        screener.run()
+
+
+    def test_qsar_Screener(self):
+
+        filenames = list(glob.glob("test_data/*.txt"))
+
+        def calcfp(mol,funcFPInfo=dict(radius=3, nBits=2048, useFeatures=False, useChirality=False)):
+
+            fp = np.asarray(AllChem.GetMorganFingerprintAsBitVect(mol, **funcFPInfo))
+            return fp
+
+        model_holder = ModelHolder(model_filename = "test_data/qsar_model.pgz", descriptor_function = calcfp)
+        screener = UnifiedScreener(filenames, output_filename = "qsar_screener_test.txt", mol_function = model_holder.get_scores, num_workers = 30, delimiter = "", skip_first_line = True, smiles_position = 0, batch_size = 1024, result_checker = lambda x: x>0.7)
+
+        screener.run()
+
 
 
     '''
