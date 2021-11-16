@@ -86,14 +86,14 @@ class UnifiedScreener(object):
     #work_function: takes in a list of RDKit mols, outputs a list of corresponding scores
     #result_checker: takes in score, outputs True if it should be kept, False if it can be thrown away. Default lambda keeps everything
     #num_workers: number of processes allowed to be spawned. If "None", detect number of cpus and use them all
-    def __init__(self, filenames, output_filename, mol_function, num_workers = None, result_checker = lambda x: True, delimiter = "", skip_first_line = True, smiles_position = 0, batch_size = 8192):
+    def __init__(self, filenames, output_filename, mol_function, num_workers = None, log_filename = None, result_checker = lambda x: True, delimiter = "", skip_first_line = True, smiles_position = 0, batch_size = 8192):
 
         #attempt to slaughter child processes when main process terminates
         import atexit
         atexit.register(self.__del__)
 
         if num_workers == None:
-            print("Detected {cpu_count()} cpus. Using them all.")
+            print(f"Detected {cpu_count()} cpus. Using them all.")
             num_workers = cpu_count()
 
         #build shared queue with all filenames
@@ -117,14 +117,16 @@ class UnifiedScreener(object):
             process = Process(target=self.worker_function, args=(self.filename_queue, mol_function, self.result_queue, batch_size))
             self.worker_processes.append(process)
 
-        process = Process(target=self.write_function, args=(output_filename, self.result_queue, result_checker))
+        process = Process(target=self.write_function, args=(output_filename, self.result_queue, result_checker, log_filename))
         self.writer_process = process
 
-    def write_function(self, filename, result_queue, result_checker):
+    def write_function(self, filename, result_queue, result_checker, log_filename):
 
         f = open(filename, 'w')
 
-        log_filename = "log.txt"
+
+        if log_filename == None:
+            log_filename = "log.txt"
         log_f = open(log_filename, 'w')
     
         global_start_time = time.time()
