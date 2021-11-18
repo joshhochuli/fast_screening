@@ -23,7 +23,7 @@ class TestWorking(unittest.TestCase):
     def test_Screener(self):
 
         filenames = list(glob.glob("test_data/a*.txt"))
-        screener = UnifiedScreener(filenames, output_filename = "screener_test.txt", mol_function = get_nsp13_structural_reward, num_workers = 10, delimiter = "", skip_first_line = True, smiles_position = 0)
+        screener = UnifiedScreener(filenames, output_filename = "output.txt", mol_function = get_nsp13_structural_reward, num_workers = 10, delimiter = "", skip_first_line = True, smiles_position = 0)
 
         screener.run()
 

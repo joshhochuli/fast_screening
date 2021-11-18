@@ -86,7 +86,7 @@ class UnifiedScreener(object):
     #work_function: takes in a list of RDKit mols, outputs a list of corresponding scores
     #result_checker: takes in score, outputs True if it should be kept, False if it can be thrown away. Default lambda keeps everything
     #num_workers: number of processes allowed to be spawned. If "None", detect number of cpus and use them all
-    def __init__(self, filenames, output_filename, mol_function, num_workers = None, log_filename = None, result_checker = lambda x: True, delimiter = "", skip_first_line = True, smiles_position = 0, batch_size = 8192):
+    def __init__(self, filenames, output_filename, mol_function, num_workers = None, log_filename = None, result_checker = lambda x: True, delimiter = "", skip_first_line = True, smiles_position = 0, batch_size = 8192, custom_work_function = None, custom_write_function = None):
 
         #attempt to slaughter child processes when main process terminates
         import atexit
@@ -111,16 +111,26 @@ class UnifiedScreener(object):
 
         self.worker_processes = []
 
+        if custom_work_function:
+            work_function = custom_work_function
+        else:
+            work_function = self.default_work_function
+
         print(f"Using {self.num_workers} workers")
         #leave one cpu for the writing process and one for the main process
         for i in range(self.num_workers - 2):
-            process = Process(target=self.worker_function, args=(self.filename_queue, mol_function, self.result_queue, batch_size))
+            process = Process(target=work_function, args=(self.filename_queue, mol_function, self.result_queue, batch_size))
             self.worker_processes.append(process)
 
-        process = Process(target=self.write_function, args=(output_filename, self.result_queue, result_checker, log_filename))
+        if custom_write_function:
+            write_function = custom_write_function
+        else:
+            write_function = self.write_function
+
+        process = Process(target=write_function, args=(output_filename, self.result_queue, result_checker, log_filename))
         self.writer_process = process
 
-    def write_function(self, filename, result_queue, result_checker, log_filename):
+    def default_write_function(self, filename, result_queue, result_checker, log_filename):
 
         f = open(filename, 'w')
 
@@ -161,7 +171,6 @@ class UnifiedScreener(object):
 
             f.flush()
             start_time = time.time()
-
     def __del__(self):
 
         for process in self.worker_processes:
@@ -181,6 +190,7 @@ class UnifiedScreener(object):
         for process in self.worker_processes:
             process.start()
 
+        time.sleep(3)
         self.writer_process.start()
 
         for process in self.worker_processes:
@@ -188,7 +198,8 @@ class UnifiedScreener(object):
 
         self.result_queue.put("EMPTY")
 
-    def worker_function(self, filename_queue, mol_function, result_queue, batch_size):
+    def default_work_function(self, filename_queue, mol_function, result_queue, batch_size):
+        print(result_queue)
 
         while True:
             try:
@@ -213,6 +224,7 @@ class UnifiedScreener(object):
                     scores = mol_function(mols)
                     results = list(zip(filenames, smiles, scores))
                     result_queue.put(results)
+                    queue_size = result_queue.qsize()
                     count = 0
                     mols = []
 
@@ -413,15 +425,20 @@ class SmilesIterator():
 
     def __next__(self):
 
-        line = self.f.readline()
-        if line == "":
-            raise StopIteration
-        if self.delimiter == "":
-            s = line.split()
-        else:
-            s = line.split(self.delimiter)
-        smiles = s[self.smiles_position]
-        mol = Chem.MolFromSmiles(smiles)
+        mol = None
+        while mol == None:
+            line = self.f.readline()
+            if line == "":
+                raise StopIteration
+            if self.delimiter == "":
+                s = line.split()
+            else:
+                s = line.split(self.delimiter)
+            smiles = s[self.smiles_position]
+            mol = Chem.MolFromSmiles(smiles)
+            if mol == None:
+                print(f"skipping line: {line}")
+
         return mol
 
     def __del__(self):
