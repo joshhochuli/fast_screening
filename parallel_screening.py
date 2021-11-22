@@ -92,6 +92,10 @@ class UnifiedScreener(object):
         import atexit
         atexit.register(self.__del__)
 
+        self.delimiter = delimiter
+        self.smiles_position = smiles_position
+        self.skip_first_line = skip_first_line
+
         if num_workers == None:
             print(f"Detected {cpu_count()} cpus. Using them all.")
             num_workers = cpu_count()
@@ -211,7 +215,7 @@ class UnifiedScreener(object):
                 return
 
             filename, iterator_class = queue_item
-            iterator = iterator_class(filename)
+            iterator = iterator_class(filename, smiles_position = self.smiles_position, delimiter = self.delimiter)
             print(f"Worker using file: {filename}")
 
             count = 0
