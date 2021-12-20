@@ -124,7 +124,6 @@ class UnifiedScreener(object):
 
         f = open(filename, 'w')
 
-
         if log_filename == None:
             log_filename = "log.txt"
         log_f = open(log_filename, 'w')
@@ -143,8 +142,16 @@ class UnifiedScreener(object):
             
 
             for x in result:
-                if not result_checker(x[2]):
-                    continue
+
+                filename = x[0]
+                smiles = x[1]
+                mol = x[2]
+
+                if mol == None:
+                  continue
+
+                if not result_checker(mol):
+                  continue
 
                 s = ",".join([str(i) for i in x] )
                 f.write(f"{s}\n")
@@ -216,7 +223,11 @@ class UnifiedScreener(object):
                     count = 0
                     mols = []
 
-                mols.append((filename, Chem.MolToSmiles(mol), mol))
+                try:
+                  smiles = Chem.MolToSmiles(mol)
+                except:
+                  smiles = None
+                mols.append((filename, smiles, mol))
 
             #run final batch
             filenames, smiles, mols = zip(*mols)
