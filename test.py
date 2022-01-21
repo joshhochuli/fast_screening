@@ -1,7 +1,9 @@
 import unittest
+import numpy as np
 import glob
+from rdkit.Chem import AllChem
 
-from parallel_screening import *
+from parallel_screening import ModelHolder, UnifiedScreener
 
 from scoring_function import get_nsp13_structural_reward
 
@@ -38,7 +40,7 @@ class TestWorking(unittest.TestCase):
             return fp
 
         model_holder = ModelHolder(model_filename = "test_data/qsar_model.pgz", descriptor_function = calcfp)
-        screener = UnifiedScreener(filenames, output_filename = "qsar_screener_test.txt", mol_function = model_holder.get_scores, num_workers = 30, delimiter = "", skip_first_line = True, smiles_position = 0, batch_size = 1024, result_checker = lambda x: x>0.7)
+        screener = UnifiedScreener(filenames, output_filename = "qsar_screener_test.txt", mol_function = model_holder.get_scores, num_workers = None, delimiter = "", skip_first_line = True, smiles_position = 0, batch_size = 1024, result_checker = lambda x: x>0.7)
 
         screener.run()
 
