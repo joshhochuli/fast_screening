@@ -1,0 +1,11 @@
+name: fast_screening
+channels:
+  - defaults
+dependencies:
+  - numpy
+  - pandas
+  - rdkit
+  - scikit-learn=1.0.1
+  - scipy
+  - networkx
+prefix: /home/josh/.miniconda3/envs/fast_screening

@@ -7,14 +7,11 @@ from parallel_screening import ModelHolder, UnifiedScreener, SDFIterator, Smiles
 
 from scoring_function import get_nsp13_structural_reward
 
-
-
-
 class TestAll(unittest.TestCase):
 
     def test_SmilesIterator(self):
 
-        filename = "test_data/10.txt"
+        filename = "test_data/short_xaa.txt"
 
         iterator = SmilesIterator(filename = filename, skip_first_line = True, delimiter = "", smiles_position = 0)
 
@@ -35,7 +32,7 @@ class TestAll(unittest.TestCase):
 
     def test_SDFIterator(self):
 
-        filename = "test_data/test.sdf"
+        filename = "test_data/short_xaa.sdf"
 
         print("Testing no supplied id_field")
         iterator = SDFIterator(filename)
@@ -53,16 +50,7 @@ class TestAll(unittest.TestCase):
                 break
             print(data)
 
-    '''
-    def test_Screener(self):
-
-        filenames = list(glob.glob("test_data/a*.txt"))
-        screener = UnifiedScreener(filenames, output_filename = "output.txt", mol_function = get_nsp13_structural_reward, num_workers = 10, delimiter = "", skip_first_line = True, smiles_position = 0)
-
-        screener.run()
-    '''
-
-
+ 
     def test_qsar_Screener_smiles(self):
 
         filenames = list(glob.glob("test_data/short*.txt"))
@@ -93,39 +81,74 @@ class TestAll(unittest.TestCase):
 
         screener.run()
 
+    def test_pharmacophore_Screener_smiles(self):
+
+        filenames = list(glob.glob("test_data/short*.txt"))
+
+        def bulk_mol_function(mols):
+
+            return [get_nsp13_structural_reward(x) for x in mols]
+
+        iterators = [SmilesIterator(filename, delimiter = "", skip_first_line = True, smiles_position = 0, id_position = 1) for filename in filenames]
+        screener = UnifiedScreener(iterators, output_filename = "pharmacophore_smiles_test_output.txt", mol_function = bulk_mol_function)
+
+        screener.run()
+
+    def test_pharmacophore_Screener_sdf(self):
+
+        filenames = list(glob.glob("test_data/short*.sdf"))
+
+        def bulk_mol_function(mols):
+
+            return [get_nsp13_structural_reward(x) for x in mols]
+
+        iterators = [SDFIterator(filename, id_field = "ID") for filename in filenames]
+        screener = UnifiedScreener(iterators, output_filename = "pharmacophore_sdf_test_output.txt", mol_function = bulk_mol_function)
+
+        screener.run()
 
 
+    def test_arbitrary_Screener_smiles(self):
 
-    '''
-    def test_normal(self):
+        filenames = list(glob.glob("test_data/short*.txt"))
 
+        def bulk_mol_function(mols):
 
-        model = get_model()
+            def get_num_nitrogens(mol):
+                nitrogen_count = 0
+                for atom in mol.GetAtoms():
+                    if atom.GetSymbol() == "N":
+                        nitrogen_count += 1
 
-        #molecule_by_molecule_screen('/home/josh/git/sars-cov-mpro/datasets/curated_data/drugbank.sdf', model = model, output_filename = 'test.csv', num_workers = 2)
-        parallel_screen_sdf('/home/josh/git/sars-cov-mpro/datasets/curated_data/drugbank.sdf', model = model, output_filename = 'test.csv', num_workers = 12, batch_size = 4096)
+                return nitrogen_count
 
-        exit()
+            return [get_num_nitrogens(x) for x in mols]
 
-        filenames = ["data/Enamine_advanced_collection_202002.sdf", 
-                    "data/Enamine_Hit_Locator_Library_300115cmpds_20200110.sdf",
-                    "data/Enamine_functional_collection_43057cmpds_20200220.sdf",
-                    "data/Enamine_premium_collection_202002.sdf"]
+        iterators = [SmilesIterator(filename, delimiter = "", skip_first_line = True, smiles_position = 0, id_position = 1) for filename in filenames]
+        screener = UnifiedScreener(iterators, output_filename = "arbitrary_smiles_test_output.txt", mol_function = bulk_mol_function)
 
-        output_names = ["output/advanced_hits.csv",
-                        "output/hll_hits.csv",
-                        "output/functional_hits.csv",
-                        "output/premium_hits.csv"]
+        screener.run()
 
-        for i in range(len(filenames)):
-            filename = filenames[i]
-            output_filename = output_names[i]
-            print(filename)
+    def test_arbitrary_Screener_sdf(self):
 
-            molecule_by_molecule_screen(filename, model = model, output_filename = output_filename)
+        filenames = list(glob.glob("test_data/short*.sdf"))
 
+        def bulk_mol_function(mols):
 
-    '''
+            def get_num_nitrogens(mol):
+                nitrogen_count = 0
+                for atom in mol.GetAtoms():
+                    if atom.GetSymbol() == "N":
+                        nitrogen_count += 1
+
+                return nitrogen_count
+
+            return [get_num_nitrogens(x) for x in mols]
+
+        iterators = [SDFIterator(filename, id_field = "ID") for filename in filenames]
+        screener = UnifiedScreener(iterators, output_filename = "arbitrary_sdf_test_output.txt", mol_function = bulk_mol_function)
+
+        screener.run()
 
 if __name__ == "__main__":
     unittest.main()
