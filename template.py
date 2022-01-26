@@ -1,4 +1,4 @@
-from parallel_screening import ModelHolder, UnifiedScreener
+from parallel_screening import ModelHolder, UnifiedScreener, SmilesIterator, SDFIterator
 
 from rdkit.Chem import AllChem
 import numpy as np
@@ -6,7 +6,7 @@ import glob
 
 
 #40B library would be "/proj/tropshalab/shared/REAL_Library/plaintext/*.txt" on longleaf
-filenames_to_screen = list(glob.glob("test_data/*.txt"))
+filenames_to_screen = list(glob.glob("test_data/short*.txt"))
 
 #location of pickled model, must be .pgz
 #if you run and get warnings about Classifier versions, its best to update the environment to match exactly
@@ -25,14 +25,15 @@ def get_descriptor(mol,funcFPInfo=dict(radius=3, nBits=2048, useFeatures=False, 
 model_holder = ModelHolder(model_filename = model_filename, 
                            descriptor_function = get_descriptor)
 
+iterators = [SmilesIterator(filename, delimiter = "", skip_first_line = True, smiles_position = 0, id_position = 1) for filename in filenames_to_screen]
 
-screener = UnifiedScreener(filenames_to_screen, #variable set above
+#if using SDF files
+#iterators = [SDFIterator(filename, id_field = "ENTER HERE")]
+
+screener = UnifiedScreener(iterators, #already set above
                            output_filename = "example_output_filename.txt", 
                            mol_function = model_holder.get_scores, #this shouldn't need to be changed
                            num_workers = None, #None will auto-detect cpus and use them all, specify a number otherwise
-                           delimiter = "", #default for 40B library
-                           skip_first_line = True, #default for 40B library
-                           smiles_position = 0, #default for 40B library
                            batch_size = 1024,  #fiddling can affect speed, don't know what's optimal
                            result_checker = lambda x: x>0.7, #function to take in result (e.g. model score) and return True/False to keep/throw away
                            )
