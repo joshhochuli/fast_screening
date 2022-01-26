@@ -41,15 +41,11 @@ class UnifiedScreener(object):
     #work_function: takes in a list of RDKit mols, outputs a list of corresponding scores
     #result_checker: takes in score, outputs True if it should be kept, False if it can be thrown away. Default lambda keeps everything
     #num_workers: number of processes allowed to be spawned. If "None", detect number of cpus and use them all
-    def __init__(self, filenames, output_filename, mol_function, num_workers = None, log_filename = None, result_checker = lambda x: True, delimiter = "", skip_first_line = True, smiles_position = 0, batch_size = 8192, custom_work_function = None, custom_write_function = None):
+    def __init__(self, iterators, output_filename, mol_function, num_workers = None, log_filename = None, result_checker = lambda x: True, batch_size = 8192, custom_work_function = None, custom_write_function = None):
 
         #attempt to slaughter child processes when main process terminates
         import atexit
         atexit.register(self.__del__)
-
-        self.delimiter = delimiter
-        self.smiles_position = smiles_position
-        self.skip_first_line = skip_first_line
 
         if num_workers == None:
             print(f"Detected {cpu_count()} cpus. Using them all.")
@@ -57,15 +53,13 @@ class UnifiedScreener(object):
         else:
             print(f"Using {self.num_workers} workers as specified")
 
-        #build shared queue with all filenames
-        self.filename_queue = Queue()
-        for filename in filenames:
-            extension = filename.split(".")[-1].lower()
-            if extension == "smiles" or extension == "csv" or extension == "txt":
-                self.filename_queue.put((filename, SmilesIterator))
+        #build shared queue with all file iterators
+        self.iterator_queue = Queue()
+        for iterator in iterators:
+                self.iterator_queue.put(iterator)
 
         #add flag at end of queue to signal workers to exit gracefully
-        self.filename_queue.put("EMPTY")
+        self.iterator_queue.put("EMPTY")
 
         self.result_queue = Queue()
         self.num_workers = num_workers
@@ -79,7 +73,7 @@ class UnifiedScreener(object):
 
         #leave one cpu for the writing process and one for the main process
         for i in range(self.num_workers - 2):
-            process = Process(target=work_function, args=(self.filename_queue, mol_function, self.result_queue, batch_size))
+            process = Process(target=work_function, args=(self.iterator_queue, mol_function, self.result_queue, batch_size))
             self.worker_processes.append(process)
 
         if custom_write_function:
@@ -112,10 +106,10 @@ class UnifiedScreener(object):
             
 
             for x in result:
-
                 filename = x[0]
                 smiles = x[1]
-                mol = x[2]
+                id_val = x[2]
+                mol = x[3]
 
                 if mol == None:
                   continue
@@ -141,11 +135,13 @@ class UnifiedScreener(object):
     def __del__(self):
 
         for process in self.worker_processes:
-            process.terminate()
-            process.join()
+            if process is not None:
+                process.terminate()
+                process.join()
 
-        self.writer_process.terminate()
-        self.writer_process.join()
+        if self.writer_process is not None:
+            self.writer_process.terminate()
+            self.writer_process.join()
 
     def dummy_mol_function(self, mol):
 
@@ -165,30 +161,29 @@ class UnifiedScreener(object):
 
         self.result_queue.put("EMPTY")
 
-    def default_work_function(self, filename_queue, mol_function, result_queue, batch_size):
+    def default_work_function(self, iterator_queue, mol_function, result_queue, batch_size):
 
         while True:
             try:
-                queue_item = filename_queue.get()
+                queue_item = iterator_queue.get()
             except:
                 return
             if queue_item == "EMPTY":
-                filename_queue.put("EMPTY")
+                iterator_queue.put("EMPTY")
                 return
 
-            filename, iterator_class = queue_item
-            iterator = iterator_class(filename, smiles_position = self.smiles_position, delimiter = self.delimiter)
-            print(f"Worker {id(current_process())} using file: {filename}")
+            iterator = queue_item
+            print(f"Worker {id(current_process())} using file: {iterator.filename}")
 
             count = 0
             mols = []
-            for mol in iterator:
+            for mol, id_val in iterator:
                 count += 1
                 if count >= batch_size:
 
-                    filenames, smiles, mols = zip(*mols)
+                    filenames, smiles, id_vals, mols = zip(*mols)
                     scores = mol_function(mols)
-                    results = list(zip(filenames, smiles, scores))
+                    results = list(zip(filenames, smiles, id_vals, scores))
                     result_queue.put(results)
                     queue_size = result_queue.qsize()
                     count = 0
@@ -198,12 +193,12 @@ class UnifiedScreener(object):
                   smiles = Chem.MolToSmiles(mol)
                 except:
                   smiles = None
-                mols.append((filename, smiles, mol))
+                mols.append((iterator.filename, smiles, id_val, mol))
 
             #run final batch
-            filenames, smiles, mols = zip(*mols)
+            filenames, smiles, id_vals, mols = zip(*mols)
             scores = mol_function(mols)
-            results = list(zip(filenames, smiles, scores))
+            results = list(zip(filenames, smiles, id_vals, scores))
             result_queue.put(results)
             count = 0
             mols = []
@@ -221,14 +216,14 @@ class SplitScreener(object):
         atexit.register(self.__del__)
 
         #build shared queue of all filenames
-        self.filename_queue = Queue()
+        self.iterator_queue = Queue()
         for filename in filenames:
             extension = filename.split(".")[-1].lower()
             if extension == "smiles" or extension == "csv" or extension == "txt":
-                self.filename_queue.put((filename, SmilesIterator))
+                self.iterator_queue.put((filename, SmilesIterator))
 
         #put flag at end of queue to signal workers to gracefully exit
-        self.filename_queue.put("EMPTY")
+        self.iterator_queue.put("EMPTY")
 
         self.mol_queue = Queue()
         self.result_queue = Queue()
@@ -239,7 +234,7 @@ class SplitScreener(object):
         self.processes = []
         print(f"Using {self.file_read_workers} workers to read files and generate mols")
         for i in range(self.file_read_workers):
-            process = Process(target=self.reader_function, args=(self.filename_queue, self.mol_queue, 10))
+            process = Process(target=self.reader_function, args=(self.iterator_queue, self.mol_queue, 10))
             self.processes.append(process)
 
         print(f"Using {self.model_workers} workers to run models")
@@ -334,11 +329,11 @@ class SplitScreener(object):
             results = [(point[0], point[1], mol_function(point[2])) for point in data]
             result_queue.put(results)
 
-    def reader_function(self, filename_queue, mol_queue, max_queue_size = 10, batch_size = 32768):
+    def reader_function(self, iterator_queue, mol_queue, max_queue_size = 10, batch_size = 32768):
 
         while True:
             try:
-                queue_item = filename_queue.get()
+                queue_item = iterator_queue.get()
             except:
                 return
             print(queue_item)
@@ -371,23 +366,93 @@ class SplitScreener(object):
                 mols.append((filename, Chem.MolToSmiles(mol), mol))
 
 class SDFIterator():
-    pass
+ 
+    def __init__(self, filename, id_field = None, test = True):
+        self.id_field = id_field
+
+        if filename.split(".")[-1].lower() != "sdf":
+            raise Exception("Provided filename '{filename}' does not end in sdf")
+
+        self.filename = filename
+
+        if test:
+            self.test()
+        
+
+    def test(self):
+
+        print(self.filename)
+        for mol, id_val in self:
+            assert(mol is not None)
+            if self.id_field:
+                id_val = mol.GetProp(self.id_field)
+                assert(id_val is not None)
+            else:
+                id_val = None
+                print(f"No id_position supplied for {self.filename}, output molecules will not have associated id value")
+            print(mol, mol.GetNumAtoms(), id_val)
+
+            #important: if an SDMolSupplier object belongs to this object, it won't be pickable and will fail to fork later
+            self.suppl = None
+
+            return
+
+    def __iter__(self):
+
+        self.suppl = Chem.SDMolSupplier(self.filename)
+        return self
+
+    def __next__(self):
+
+        mol = self.suppl.__next__()
+        if mol == None:
+            raise StopIteration
+        if self.id_field:
+            id_val = mol.GetProp(self.id_field)
+        else:
+            id_val = None
+
+        return (mol, id_val)
+
+    def __del__(self):
+        pass
+        #SDMolSupplier handles closing?
 
 class SmilesIterator():
 
-    def __init__(self, filename, skip_first_line = True, delimiter = ",", smiles_position = 0):
+    def __init__(self, filename, skip_first_line = True, delimiter = ",", smiles_position = 0, id_position = None, test = True):
 
         self.filename = filename
         self.delimiter = delimiter
         self.smiles_position = smiles_position
-        f = open(filename, 'r')
+        self.skip_first_line = skip_first_line
+        self.id_position = id_position
+        self.f = None
 
-        if skip_first_line:
-            f.readline()
+        if test:
+            self.test()
 
-        self.f = f
+
+    def test(self):
+
+        for mol, id_val in self:
+
+
+            assert(mol is not None)
+            if self.id_position:
+                assert(id_val is not None)
+            else:
+                print(f"No id_position supplied for {self.filename}, output molecules will not have associated id value")
+
+            self.f.close()
+            self.f = None
+            return
 
     def __iter__(self):
+        f = open(self.filename, 'r')
+        if self.skip_first_line:
+            f.readline()
+        self.f = f
         return self
 
     def __next__(self):
@@ -402,11 +467,17 @@ class SmilesIterator():
             else:
                 s = line.split(self.delimiter)
             smiles = s[self.smiles_position]
+            if self.id_position:
+                id_val = s[self.id_position]
+            else:
+                id_val = None
             mol = Chem.MolFromSmiles(smiles)
             if mol == None:
                 print(f"skipping line: {line}")
 
-        return mol
+        return (mol, id_val)
 
     def __del__(self):
-        self.f.close()
+        if self.f:
+            self.f.close()
+            self.f = None

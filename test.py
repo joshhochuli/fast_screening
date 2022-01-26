@@ -3,36 +3,69 @@ import numpy as np
 import glob
 from rdkit.Chem import AllChem
 
-from parallel_screening import ModelHolder, UnifiedScreener
+from parallel_screening import ModelHolder, UnifiedScreener, SDFIterator, SmilesIterator
 
 from scoring_function import get_nsp13_structural_reward
 
 
 
 
-class TestWorking(unittest.TestCase):
+class TestAll(unittest.TestCase):
 
     def test_SmilesIterator(self):
 
-        filename = "test_data/smile_all_520.txt"
+        filename = "test_data/10.txt"
+
         iterator = SmilesIterator(filename = filename, skip_first_line = True, delimiter = "", smiles_position = 0)
 
-        for i, mol in enumerate(iterator):
-            if i > 10:
+        print("Testing no supplied id_position")
+        for i, data in enumerate(iterator):
+            if i > 3:
                 break
-            print(mol)
+            print(data)
 
+        print("Testing supplied id_position")
+        iterator = SmilesIterator(filename = filename, skip_first_line = True, delimiter = "", smiles_position = 0, id_position = 1)
+
+        for i, data in enumerate(iterator):
+            if i > 3:
+                break
+            print(data)
+
+
+    def test_SDFIterator(self):
+
+        filename = "test_data/test.sdf"
+
+        print("Testing no supplied id_field")
+        iterator = SDFIterator(filename)
+
+        for i, data in enumerate(iterator):
+            if i > 3:
+                break
+            print(data)
+ 
+        print("Testing supplied id_field")
+        iterator = SDFIterator(filename, id_field = "ID")
+
+        for i, data in enumerate(iterator):
+            if i > 3:
+                break
+            print(data)
+
+    '''
     def test_Screener(self):
 
         filenames = list(glob.glob("test_data/a*.txt"))
         screener = UnifiedScreener(filenames, output_filename = "output.txt", mol_function = get_nsp13_structural_reward, num_workers = 10, delimiter = "", skip_first_line = True, smiles_position = 0)
 
         screener.run()
+    '''
 
 
-    def test_qsar_Screener(self):
+    def test_qsar_Screener_smiles(self):
 
-        filenames = list(glob.glob("test_data/*.txt"))
+        filenames = list(glob.glob("test_data/short*.txt"))
 
         def calcfp(mol,funcFPInfo=dict(radius=3, nBits=2048, useFeatures=False, useChirality=False)):
 
@@ -40,9 +73,26 @@ class TestWorking(unittest.TestCase):
             return fp
 
         model_holder = ModelHolder(model_filename = "test_data/qsar_model.pgz", descriptor_function = calcfp)
-        screener = UnifiedScreener(filenames, output_filename = "qsar_screener_test.txt", mol_function = model_holder.get_scores, num_workers = None, delimiter = "", skip_first_line = True, smiles_position = 0, batch_size = 1024, result_checker = lambda x: x>0.7)
+        iterators = [SmilesIterator(filename, delimiter = "", skip_first_line = True, smiles_position = 0) for filename in filenames]
+        screener = UnifiedScreener(iterators, output_filename = "qsar_screener_test.txt", mol_function = model_holder.get_scores, num_workers = None, batch_size = 1024, result_checker = lambda x: x>0.7)
 
         screener.run()
+
+    def test_qsar_Screener_sdf(self):
+
+        filenames = list(glob.glob("test_data/short*.sdf"))
+
+        def calcfp(mol,funcFPInfo=dict(radius=3, nBits=2048, useFeatures=False, useChirality=False)):
+
+            fp = np.asarray(AllChem.GetMorganFingerprintAsBitVect(mol, **funcFPInfo))
+            return fp
+
+        model_holder = ModelHolder(model_filename = "test_data/qsar_model.pgz", descriptor_function = calcfp)
+        iterators = [SDFIterator(filename, id_field = "ID") for filename in filenames]
+        screener = UnifiedScreener(iterators, output_filename = "qsar_screener_test.txt", mol_function = model_holder.get_scores, num_workers = None, batch_size = 1024, result_checker = lambda x: x>0.7)
+
+        screener.run()
+
 
 
 
