@@ -1,6 +1,7 @@
 name: fast_screening
 channels:
   - defaults
+  - conda-forge
 dependencies:
   - numpy
   - pandas
